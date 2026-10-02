@@ -1,0 +1,1 @@
+# STRUCT_LICITFE
