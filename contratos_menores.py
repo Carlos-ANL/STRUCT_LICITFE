@@ -16,6 +16,11 @@ from keywords import KEYWORDS
 
 API = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/buscador"
 WEB = "https://prod6.seace.gob.pe/buscador-publico/contrataciones"
+ARCH_BASE = "https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos-publico"
+ARCH_LISTAR = ARCH_BASE + "/listar-archivos-contrato/{id_contrato}/{tipo}"
+ARCH_DESCARGAR = ARCH_BASE + "/descargar-archivo-contrato/{id_archivo}"
+TIPO_ARCHIVO = 1  # "Anexo de la contratación" = el requerimiento
+MAX_PDF_MB = 40   # Telegram permite hasta 50 MB por archivo
 TZ = ZoneInfo("America/Lima")
 PAGE_SIZE = 50
 MAX_PAGES = 40
@@ -24,6 +29,8 @@ TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 NOTIFY_EMPTY = os.getenv("NOTIFY_EMPTY", "0") == "1"
 URGENTE_HORAS = float(os.getenv("URGENTE_HORAS", "6"))
+# 1 = además del enlace, adjunta el PDF del requerimiento en Telegram
+ENVIAR_PDF = os.getenv("ENVIAR_PDF", "1") == "1"
 # Cada corrida revisa desde la corrida exitosa anterior (menos un margen de seguridad),
 # así cubre todo el tramo entre corridas, incluida la noche, aunque GitHub retrase o salte una.
 MARGEN_MIN = int(os.getenv("MARGEN_MIN", "60"))
@@ -100,6 +107,45 @@ def traer_publicados(desde: datetime) -> list[dict]:
     return items
 
 
+def listar_archivos(session, id_contrato) -> list[dict]:
+    """Archivos (requerimiento) de una contratación. Si falla, devuelve lista vacía."""
+    try:
+        url = ARCH_LISTAR.format(id_contrato=id_contrato, tipo=TIPO_ARCHIVO)
+        r = session.get(url, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def enlace_archivo(a: dict) -> str:
+    return ARCH_DESCARGAR.format(id_archivo=a["idContratoArchivo"])
+
+
+def enviar_documento(session, a: dict, nombre_base: str):
+    """Descarga el archivo desde SEACE y lo manda a Telegram. Falla en silencio:
+    el enlace del aviso ya queda como respaldo."""
+    try:
+        if int(a.get("tamanio") or 0) > MAX_PDF_MB * 1024 * 1024:
+            return
+        h = dict(HEADERS, Accept="application/octet-stream")
+        r = session.get(enlace_archivo(a), headers=h, timeout=60)
+        r.raise_for_status()
+        ext = a.get("descripcionExtension") or ".pdf"
+        nombre = re.sub(r"[^\w.-]+", "_", nombre_base) + ext
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendDocument",
+            data={"chat_id": CHAT_ID, "caption": f"📄 Requerimiento {nombre_base}"[:200]},
+            files={"document": (nombre, r.content)},
+            timeout=90,
+        )
+        resp.raise_for_status()
+        time.sleep(0.6)
+    except Exception:
+        pass
+
+
 def enviar(texto: str):
     r = requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -118,7 +164,7 @@ def tiempo_restante(it: dict):
         return None
 
 
-def formatear(it: dict, palabras: list[str]) -> str:
+def formatear(it: dict, palabras: list[str], archivos: list[dict] | None = None) -> str:
     e = html.escape
     h = tiempo_restante(it)
     if h is None:
@@ -129,6 +175,14 @@ def formatear(it: dict, palabras: list[str]) -> str:
         txt = f"{int(h)} h {int((h % 1) * 60)} min"
         plazo = f"\n⏳ Quedan <b>{txt}</b> para cotizar"
         marca = "🚨 URGENTE" if h <= URGENTE_HORAS else "🔧"
+    if archivos:
+        docs = "\n".join(
+            f"📄 <a href=\"{enlace_archivo(a)}\">Descargar requerimiento</a>"
+            + (f" ({e(a['nombre'])})" if len(archivos) > 1 else "")
+            for a in archivos
+        )
+    else:
+        docs = "📄 Sin requerimiento adjunto en SEACE"
     return (
         f"{marca} <b>{e(it['desContratacion'])}</b>\n"
         f"🏛 {e(it['nomEntidad'])}\n"
@@ -137,6 +191,7 @@ def formatear(it: dict, palabras: list[str]) -> str:
         f"⏰ Cotizar: {e(it['fecIniCotizacion'])} → {e(it['fecFinCotizacion'])}"
         f"{plazo}\n"
         f"🔎 Coincide: {e(', '.join(palabras))}\n"
+        f"{docs}\n"
         f"🔗 <a href=\"{WEB}\">Abrir buscador SEACE</a> (ID {it['idContrato']})"
     )
 
@@ -179,8 +234,13 @@ def main():
         # lo que vence antes se envía primero
         pendientes.sort(key=lambda x: parse_fecha(x[0]["fecFinCotizacion"]))
         enviar(f"📢 <b>Ferretería/EPP</b> — {len(pendientes)} nueva(s) a las {hora}")
+        sesion = requests.Session()
         for it, palabras in pendientes:
-            enviar(formatear(it, palabras))
+            archivos = listar_archivos(sesion, it["idContrato"])
+            enviar(formatear(it, palabras, archivos))
+            if ENVIAR_PDF:
+                for a in archivos:
+                    enviar_documento(sesion, a, it["desContratacion"])
             # se marca como visto SOLO después de enviarlo con éxito
             seen[str(it["idContrato"])] = ahora.strftime("%Y-%m-%d")
             guardar_vistos(seen)
@@ -208,6 +268,10 @@ def run():
         except Exception:
             pass
         raise
+
+
+if __name__ == "__main__":
+    run()
 
 
 if __name__ == "__main__":
