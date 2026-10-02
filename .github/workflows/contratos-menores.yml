@@ -1,6 +1,7 @@
 name: contratos-menores-ferreteria-epp
 on:
   schedule:
+    # Hora Lima (UTC-5): 12:00 pm, 5:00 pm y 9:00 pm
     - cron: "0 17 * * *"   # 12:00 pm Lima
     - cron: "0 22 * * *"   # 5:00 pm Lima
     - cron: "0 2 * * *"    # 9:00 pm Lima
