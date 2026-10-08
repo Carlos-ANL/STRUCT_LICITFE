@@ -27,7 +27,6 @@ MAX_PAGES = 40
 SEEN_FILE = Path(__file__).with_name("seen_ferreteria.json")
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-NOTIFY_EMPTY = os.getenv("NOTIFY_EMPTY", "0") == "1"
 URGENTE_HORAS = float(os.getenv("URGENTE_HORAS", "6"))
 # 1 = además del enlace, adjunta el PDF del requerimiento en Telegram
 ENVIAR_PDF = os.getenv("ENVIAR_PDF", "1") == "1"
@@ -200,9 +199,19 @@ def guardar_vistos(seen: dict):
     SEEN_FILE.write_text(json.dumps(seen, ensure_ascii=False, indent=1))
 
 
+def clave(it: dict) -> str:
+    """Segunda llave anti-repetidos: entidad + código (CM-xxx-2026-...). Evita reenviar
+    la misma convocatoria si SEACE la republica con otro ID interno."""
+    return "c:" + norm(it.get("nomEntidad", "")) + "|" + norm(it.get("desContratacion", ""))
+
+
 def main():
     ahora = datetime.now(TZ)
+    hoy = ahora.strftime("%Y-%m-%d")
+    hora = ahora.strftime("%H:%M")
     inicio_hoy = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    enviar(f"🔎 Iniciando búsqueda de las {hora} (ferretería/EPP)...")
 
     seen = json.loads(SEEN_FILE.read_text()) if SEEN_FILE.exists() else {}
     limite = (ahora - timedelta(days=MAX_DIAS_ATRAS + 10)).strftime("%Y-%m-%d")
@@ -218,42 +227,41 @@ def main():
     vigentes = [i for i in todos if i.get("nomEstadoContrato") == "Vigente"
                 and i.get("nomObjetoContrato") == "Bien"]
 
-    pendientes, enviados = [], 0
+    pendientes, ya_revisadas, en_cola = [], 0, set()
     for it in vigentes:
-        pid = str(it["idContrato"])
-        if pid in seen:
+        pid, ck = str(it["idContrato"]), clave(it)
+        # VERIFICACIÓN: ¿ya se revisó/envió antes (por ID o por entidad+código)?
+        if pid in seen or ck in seen or ck in en_cola:
+            ya_revisadas += 1
             continue
         palabras = coincidencias(it.get("desObjetoContrato", ""))
         if palabras:
             pendientes.append((it, palabras))
+            en_cola.add(ck)
         else:
-            seen[pid] = ahora.strftime("%Y-%m-%d")  # revisado, no es de tu rubro
+            seen[pid] = seen[ck] = hoy  # revisada, no es de tu rubro
 
-    hora = ahora.strftime("%H:%M")
-    if pendientes:
-        # lo que vence antes se envía primero
-        pendientes.sort(key=lambda x: parse_fecha(x[0]["fecFinCotizacion"]))
-        enviar(f"📢 <b>Ferretería/EPP</b> — {len(pendientes)} nueva(s) a las {hora}")
-        sesion = requests.Session()
-        for it, palabras in pendientes:
-            archivos = listar_archivos(sesion, it["idContrato"])
-            enviar(formatear(it, palabras, archivos))
-            if ENVIAR_PDF:
-                for a in archivos:
-                    enviar_documento(sesion, a, it["desContratacion"])
-            # se marca como visto SOLO después de enviarlo con éxito
-            seen[str(it["idContrato"])] = ahora.strftime("%Y-%m-%d")
-            guardar_vistos(seen)
-            enviados += 1
-    elif NOTIFY_EMPTY:
-        enviar(f"Sin novedades de ferretería/EPP a las {hora} "
-               f"({len(vigentes)} bienes vigentes revisados).")
+    enviados = 0
+    # lo que vence antes se envía primero
+    pendientes.sort(key=lambda x: parse_fecha(x[0]["fecFinCotizacion"]))
+    sesion = requests.Session()
+    for it, palabras in pendientes:
+        pid, ck = str(it["idContrato"]), clave(it)
+        if pid in seen or ck in seen:  # doble chequeo justo antes de enviar
+            continue
+        archivos = listar_archivos(sesion, it["idContrato"])
+        enviar(formatear(it, palabras, archivos))
+        if ENVIAR_PDF:
+            for a in archivos:
+                enviar_documento(sesion, a, it["desContratacion"])
+        # se marca como visto SOLO después de enviarlo con éxito, y se guarda de inmediato
+        seen[pid] = seen[ck] = hoy
+        guardar_vistos(seen)
+        enviados += 1
 
-    # Aviso diario (una vez, en la primera corrida del día) para saber que el bot sigue vivo
-    hoy = ahora.strftime("%Y-%m-%d")
-    if ahora.hour >= 8 and seen.get("_heartbeat") != hoy:
-        enviar(f"✅ Bot ferretería/EPP activo — {hoy}. Revisa a las 12:00, 17:00 y 21:00.")
-        seen["_heartbeat"] = hoy
+    enviar(f"✅ Búsqueda terminada ({hora}): {enviados} nueva(s) enviada(s) · "
+           f"{ya_revisadas} ya revisadas antes (omitidas) · "
+           f"{len(vigentes)} bienes vigentes analizados.")
 
     seen["_last_run"] = ahora.isoformat()  # solo si todo salió bien
     guardar_vistos(seen)
