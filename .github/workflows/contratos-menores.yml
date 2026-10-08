@@ -1,8 +1,8 @@
 name: contratos-menores-ferreteria-epp
 on:
   schedule:
-    # Hora Lima (UTC-5): 12:00 pm, 5:00 pm y 9:00 pm
-    - cron: "0 17 * * *"   # 12:00 pm Lima
+    # Hora Lima (UTC-5): 11:00 am, 5:00 pm y 9:00 pm
+    - cron: "0 16 * * *"   # 11:00 am Lima
     - cron: "0 22 * * *"   # 5:00 pm Lima
     - cron: "0 2 * * *"    # 9:00 pm Lima
   workflow_dispatch:
@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -33,6 +35,10 @@ jobs:
           git add seen_ferreteria.json
           if ! git diff --staged --quiet; then
             git commit -m "update seen"
-            git pull --rebase
-            git push
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push origin HEAD:main && exit 0
+              sleep 5
+            done
+            echo "No se pudo guardar seen_ferreteria.json"
+            exit 1
           fi
