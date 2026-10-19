@@ -1,20 +1,27 @@
 name: contratos-menores-ferreteria-epp
+
 on:
   schedule:
-    # Hora Lima (UTC-5): 11:00 am, 5:00 pm y 9:00 pm
-    - cron: "0 16 * * *"   # 11:00 am Lima
+    # Hora Lima (UTC-5): 8:00 am, 1:00 pm, 5:00 pm y 9:00 pm
+    - cron: "0 13 * * *"   # 8:00 am Lima
+    - cron: "0 18 * * *"   # 1:00 pm Lima
     - cron: "0 22 * * *"   # 5:00 pm Lima
     - cron: "0 2 * * *"    # 9:00 pm Lima
   workflow_dispatch:
+
 concurrency:
   group: contratos-menores
   cancel-in-progress: false
+
 permissions:
   contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      TZ: America/Lima   # el script usa la fecha de Lima, no la de UTC
     steps:
       - uses: actions/checkout@v4
         with:
