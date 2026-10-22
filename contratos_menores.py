@@ -11,7 +11,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
-from curl_cffi import requests as cffi
 
 from keywords import KEYWORDS
 
@@ -32,21 +31,22 @@ URGENTE_HORAS = float(os.getenv("URGENTE_HORAS", "6"))
 # 1 = además del enlace, adjunta el PDF del requerimiento en Telegram
 ENVIAR_PDF = os.getenv("ENVIAR_PDF", "1") == "1"
 # Cada corrida revisa desde la corrida exitosa anterior (menos un margen de seguridad),
-# así cubre todo el tramo entre corridas, incluida la noche, aunque GitHub retrase o salte una.
+# así cubre todo el tramo entre corridas, incluida la noche.
 MARGEN_MIN = int(os.getenv("MARGEN_MIN", "60"))
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "1"))  # solo para la primera vez
 MAX_DIAS_ATRAS = 3
 
-# Sin User-Agent: curl_cffi usa el de un Chrome real
 HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "es-PE,es;q=0.9",
     "Referer": WEB,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 }
 
 
 def nueva_sesion():
-    return cffi.Session(impersonate="chrome")
+    return requests.Session()
 
 
 def norm(t: str) -> str:
