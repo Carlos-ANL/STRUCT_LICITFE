@@ -6,6 +6,7 @@ import os
 import re
 import time
 import unicodedata
+from curl_cffi import requests as cffi
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
