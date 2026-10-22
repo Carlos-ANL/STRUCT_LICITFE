@@ -6,12 +6,12 @@ import os
 import re
 import time
 import unicodedata
-from curl_cffi import requests as cffi
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
+from curl_cffi import requests as cffi
 
 from keywords import KEYWORDS
 
@@ -37,13 +37,16 @@ MARGEN_MIN = int(os.getenv("MARGEN_MIN", "60"))
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "1"))  # solo para la primera vez
 MAX_DIAS_ATRAS = 3
 
+# Sin User-Agent: curl_cffi usa el de un Chrome real
 HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "es-PE,es;q=0.9",
     "Referer": WEB,
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
 }
+
+
+def nueva_sesion():
+    return cffi.Session(impersonate="chrome")
 
 
 def norm(t: str) -> str:
@@ -72,6 +75,8 @@ def get_json(session, params, intentos=4):
     for i in range(intentos):
         try:
             r = session.get(API, params=params, headers=HEADERS, timeout=30)
+            if r.status_code == 403:
+                print("403 body:", r.text[:500])
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -82,7 +87,7 @@ def get_json(session, params, intentos=4):
 
 def traer_publicados(desde: datetime) -> list[dict]:
     """Pagina (orden=2: más recientes primero) hasta pasar la fecha 'desde'."""
-    session = requests.Session()
+    session = nueva_sesion()
     anio = datetime.now(TZ).year
     items = []
     for page in range(1, MAX_PAGES + 1):
@@ -245,7 +250,7 @@ def main():
     enviados = 0
     # lo que vence antes se envía primero
     pendientes.sort(key=lambda x: parse_fecha(x[0]["fecFinCotizacion"]))
-    sesion = requests.Session()
+    sesion = nueva_sesion()
     for it, palabras in pendientes:
         pid, ck = str(it["idContrato"]), clave(it)
         if pid in seen or ck in seen:  # doble chequeo justo antes de enviar
